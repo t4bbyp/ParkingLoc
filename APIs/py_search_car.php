@@ -5,7 +5,6 @@ require_once 'db_connect.php';
 $response = [];
 
 if($_SERVER["REQUEST_METHOD"] === "GET") {
-    // Check if 'car_nr' parameter is set
     if (!isset($_GET['car_nr'])) {
         echo json_encode(['error' => 'Missing car_nr parameter']);
         exit();
@@ -13,19 +12,16 @@ if($_SERVER["REQUEST_METHOD"] === "GET") {
 
     $car_nr = $_GET['car_nr'];
     
-    // Validate the 'car_nr' parameter
     if (empty($car_nr)) {
         echo json_encode(['error' => 'car_nr cannot be empty']);
         exit();
     }
     
     try {
-        // Prepare and execute the SQL query
         $stmt = $conn->prepare("SELECT car_id, car_nr FROM cars WHERE car_nr = :car_nr");
         $stmt->bindParam(':car_nr', $car_nr, PDO::PARAM_STR);
         $stmt->execute();
         
-        // Fetch the result
         $car = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if($car) {
