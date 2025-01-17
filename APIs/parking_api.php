@@ -121,7 +121,6 @@ function ParamValidation($params)
 {
     foreach ($params as $param) {
         if (!isset($_POST[$param])) {
-            // Return false
             return false;
         }
     }
