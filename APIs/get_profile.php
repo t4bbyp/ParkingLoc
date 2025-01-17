@@ -36,6 +36,5 @@ if($_SERVER["REQUEST_METHOD"] === "POST") {
     $response['message'] = 'Invalid request method.';
 }
 
-// Return response as JSON
 header('Content-Type: application/json');
 echo json_encode($response);
