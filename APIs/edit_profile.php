@@ -1,7 +1,7 @@
 <?php
 session_start();
 
-require_once 'db_connect.php'; // Include the database connection file
+require_once 'db_connect.php';
 
 $response = array();
 
@@ -35,10 +35,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             if ($stmt->execute()) {
                 $response['error'] = false;
-                $response['message'] = 'User edited.';
+                $response['message'] = 'Date modificate cu succes.';
             } else {
                 $response['error'] = true;
-                $response['message'] = 'Error while editing user';
+                $response['message'] = 'Încearcă din nou sau contactează administratorul.';
             }
         } catch (PDOException $e) {
             $response['error'] = true;
