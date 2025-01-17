@@ -1,7 +1,7 @@
 <?php
 session_start();
 
-require_once 'db_connect.php'; // Include the database connection file
+require_once 'db_connect.php';
 
 $response = array();
 
@@ -39,10 +39,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
             if ($stmt->execute()) {
                 $response['error'] = false;
-                $response['message'] = 'Car edited.';
+                $response['message'] = 'Date modificate.';
             } else {
                 $response['error'] = true;
-                $response['message'] = 'Error while editing car';
+                $response['message'] = 'Eroare în timpul actualizării. Încearcă din nou.';
             }
         } catch (PDOException $e) {
             $response['error'] = true;
