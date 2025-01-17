@@ -11,10 +11,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     if ($stmt->execute()) {
         $response['error'] = false;
-        $response['message'] = 'Location emptied.';
+        $response['message'] = 'Locație ștearsă.';
     } else {
         $response['error'] = true;
-        $response['message'] = 'Error while emptying location.';
+        $response['message'] = 'Încearcă din nou sau contactează administratorul.';
     }
 } else {
     $response['error'] = true;
