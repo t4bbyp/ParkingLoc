@@ -27,19 +27,32 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-//schimba numarul la cam_X in functie de camera pentru identificarea lor in MQTT
-#define ESP32CAM_PUBLISH_TOPIC   "esp32/cam_0"
-
+#define ESP32CAM_PUBLISH_TOPIC   "esp32/cam_2"
 
 const int bufferSize = 1024 * 23; // 23552 bytes
-const long CAMERA_ON_DURATION = 30000; // 30 de secunde
-const int DISTANCE_THRESHOLD = 15; // Interval de distanță în cm
+const long CAMERA_ON_DURATION = 20000; // 30 de secunde
+const int STABLE_READINGS_REQUIRED = 5; // Numar de citiri stabile inainte de confirmarea prezentei autovehiculului
+const int EXIT_READINGS_REQUIRED = 5; // Numar de citiri stabile inainte de confirmarea plecarii din parcare
+const int DISTANCE_FLUCTUATION_THRESHOLD = 3; // Marja de eroare pentru distantele citite
+const int DISTANCE_THRESHOLD = 20; // Distanta de detectare a masinii
+long lastDistance = 0; // Ultima distanta citita
 
 WiFiClientSecure net = WiFiClientSecure();
 MQTTClient client = MQTTClient(bufferSize);
 
 unsigned long camTimerStart = 0;
 bool cameraOn = false;
+
+void setupFlashPWM() {
+  // Configura intensitatea LED-ului cu PWM
+  ledcSetup(0, 5000, 8); // Canal 0, frecventa 5kHz, rezolutie 8-bit
+  ledcAttachPin(FLASH_GPIO_NUM, 0);
+}
+
+void setFlashBrightness(uint8_t brightness) {
+  // Seteaza intensitatea LED-ului
+  ledcWrite(0, brightness);
+}
 
 void connectAWS()
 {
@@ -55,12 +68,12 @@ void connectAWS()
     Serial.print(".");
   }
 
-  // Configurează WiFiClientSecure pentru a folosi credențialele în AWS IoT
+  // Seteaza WiFiClientSecure pentru a folosi credentialele AWS IoT a dispozitivului
   net.setCACert(AWS_CERT_CA);
   net.setCertificate(AWS_CERT_CRT);
   net.setPrivateKey(AWS_CERT_PRIVATE);
 
-  // Conectare la MQTT broker în punctul AWS definit mai sus
+  // Conectare la MQTT broker
   client.begin(AWS_IOT_ENDPOINT, 8883, net);
   client.setCleanSession(true);
 
@@ -68,6 +81,7 @@ void connectAWS()
   Serial.println("Connecting to AWS IOT");
   Serial.println("=====================\n\n");
 
+  
   while (!client.connect(THINGNAME)) {
     Serial.print(".");
     delay(100);
@@ -106,25 +120,26 @@ void cameraInit(){
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA; // 640x480
+  config.frame_size = FRAMESIZE_HVGA; // 480x320
   config.jpeg_quality = 10;
   config.fb_count = 2;
 
-  // initializare camera
+  // Initializare camera
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    Serial.printf("Initializarea camerei a esuat cu eroarea 0x%x", err);
     ESP.restart();
     return;
   }
 }
 
 void grabImage(){
+  // Captureaza imagine si trimite la AWS IoT prin MQTT
   camera_fb_t * fb = esp_camera_fb_get();
   if(fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < bufferSize){
     Serial.print("Image Length: ");
     Serial.print(fb->len);
-    Serial.print("\t Publish Image: ");
+    Serial.print("\t Imagine publicata: ");
     bool result = client.publish(ESP32CAM_PUBLISH_TOPIC, (const char*)fb->buf, fb->len);
     Serial.println(result);
 
@@ -133,10 +148,11 @@ void grabImage(){
     }
   }
   esp_camera_fb_return(fb);
-  delay(1);
+  delay(200);
 }
 
 long measureDistance() {
+  //Masoara distanta cu senzorul ultrasonic
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
@@ -144,25 +160,25 @@ long measureDistance() {
   digitalWrite(TRIG_PIN, LOW);
 
   long duration = pulseIn(ECHO_PIN, HIGH);
-  long distance = duration * 0.034 / 2; // Calculează distanța în cm
+  long distance = duration * 0.034 / 2; // Calculeaza distanta in cm
   return distance;
 }
 
 void turnOnCamera() {
-  digitalWrite(PWDN_GPIO_NUM, LOW); // Pornește camera
-  delay(100);
+  digitalWrite(PWDN_GPIO_NUM, LOW);
+  delay(500);
   cameraInit();
   cameraOn = true;
-  digitalWrite(FLASH_GPIO_NUM, HIGH);
-  Serial.println("Camera turned on.");
+  setFlashBrightness(128);
+  Serial.println("Camera pornita.");
 }
 
 void turnOffCamera() {
-  esp_camera_deinit(); // Deinitialize the camera to save power
-  digitalWrite(PWDN_GPIO_NUM, HIGH); // Power off the camera
+  esp_camera_deinit();
+  digitalWrite(PWDN_GPIO_NUM, HIGH);
   cameraOn = false;
-  digitalWrite(FLASH_GPIO_NUM, LOW);
-  Serial.println("Camera turned off.");
+  setFlashBrightness(0);
+  Serial.println("Camera oprita.");
 }
 
 void setup() {
@@ -170,33 +186,69 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(PWDN_GPIO_NUM, OUTPUT);
-  pinMode(FLASH_GPIO_NUM, OUTPUT);
+  setupFlashPWM();
   digitalWrite(PWDN_GPIO_NUM, HIGH);
 
   connectAWS();
 }
 
+
+int stableReadings = 0;
+int exitReadings = 0;
+bool carDetected = false;
+
 void loop() {
   client.loop();
+  
+  const int STABLE_ERROR_MARGIN = 2; // Marja de eroare +-2
+  long distance_1 = measureDistance();
+  Serial.print(distance_1);
+  Serial.print("\t");
 
+  lastDistance = distance_1;
   long distance = measureDistance();
 
   if (client.connected()) {
-    if (!cameraOn && distance < DISTANCE_THRESHOLD) {
-        turnOnCamera();           
-        camTimerStart = millis();
+    //Verifica stabilitatea distantei masurate pentru a determina acuratetea si existenta unui obiect in fata senzorului un timp indelungat
+    if (abs(lastDistance - distance) > DISTANCE_FLUCTUATION_THRESHOLD) {
+      stableReadings = 0; // Reseteaza numaratoarea daca exista fluctuatii mari
+    } else {
+      stableReadings++; // Numara citirile stabile
     }
 
-    if (cameraOn) {
-        grabImage();
+    // Confirma prezenta unui autovehicul dupa un anumit numar de citiri stabile 
+    if (!carDetected && stableReadings >= STABLE_READINGS_REQUIRED && distance <= DISTANCE_THRESHOLD) {
+      carDetected = true;
+      turnOnCamera();
+      camTimerStart = millis();
+      exitReadings = 0;
+    }
 
-        if (millis() - camTimerStart > CAMERA_ON_DURATION) {
-            turnOffCamera();
-        }
+    
+    if (cameraOn) {
+      grabImage();
+
+      if (millis() - camTimerStart > CAMERA_ON_DURATION) {
+        turnOffCamera();
+      }
+    }
+
+    // Confirma plecarea autovehiculului prin citiri stabile in afara intervalului acceptabil
+    if (carDetected && distance > DISTANCE_THRESHOLD) {
+      exitReadings++;
+      if (exitReadings >= EXIT_READINGS_REQUIRED) {
+        carDetected = false; // Reseteaza valoarea odata confirmata plecarea masinii
+      }
+    } else {
+      exitReadings = 0;
     }
   } else {
-      if (cameraOn) {
-          turnOffCamera();
-      }
+    if (cameraOn) {
+      turnOffCamera();
+    }
+  }
+
+  if (stableReadings >= STABLE_READINGS_REQUIRED) {
+    lastDistance = distance;
   }
 }
